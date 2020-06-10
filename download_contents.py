@@ -1,152 +1,137 @@
-from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
-import urllib.request as urllib
+import urllib
+import requests
+import json
 import os
-import time
-import logging as logger
+import re
+import pyquery
+
+all_posts = []
+post_cnt = 0
 
 
-class Instagram:
-    def __init__(self, driverPath=None, url=None, savePhotosDir=None, count=None):
-        self.driverPath = driverPath
-        self.url = url  # instagram open Account URL
-        self.savePhotosDir = savePhotosDir  # photos saving DIR
-        self.count = count  # images count
-        self.images = []
-        self.videos = []
-        self.scriptDir = os.path.dirname(os.path.realpath(__file__))  # current working Folder/Directory
-        self.postsUrls = []
-
-    def loadDriver(self):
-        try:
-            if self.driverPath is None:
-                logger.error(" Please provide a driver path")
-                return
-            # open crome options pass --incognito add_argument
-            # open crome options pass --incognito add_argument
-            chrome_options = webdriver.ChromeOptions()
-            chrome_options.add_argument("--incognito")
-            self.driver = webdriver.Chrome(executable_path=self.driverPath, options=chrome_options)
-            self.getUrl()
-        except Exception as e:
-            logger.error(str(e))
-
-    def getUrl(self):
-        try:
-            if self.driver is None:
-                logger.error(" Please provide an url")
-                return
-            self.driver.get(self.url)
-            # print(driver.get_log('driver'))
-            self.scollEnd()
-        except Exception as e:
-            logger.error(str(e))
-
-    # Helps to scroll down
-    def scollEnd(self):
-        SCROLL_PAUSE_TIME = 2
-        # Get scroll height
-        last_height = self.driver.execute_script("return document.body.scrollHeight")
-        while True:
-            print("Scrolling..............")
-            path = self.driver.find_elements_by_xpath("//*[@class='v1Nh3 kIKUG  _bz0w']//a")
-            self.getPostUrls(path)
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")  # Scroll down to bottom
-            time.sleep(SCROLL_PAUSE_TIME)  # Wait to load page
-            # Calculate new scroll height and compare with last scroll
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
-            # print(last_height ,new_height )
-            if new_height == last_height:
-                self.getPost()
-                return
-            last_height = new_height
-
-    def getPostUrls(self, path):
-        print("\nRetriving posts url .......")
-        for p in path:
-            url = p.get_attribute("href")
-            # print(url)
-            if url not in self.postsUrls:
-                self.postsUrls.append(url)
-
-        print("Total posts found = " + str(len(self.postsUrls)))
-        # print(self.postsUrls)
-
-    def getPost(self):
-        for url in self.postsUrls:
-            print(url + "\n")
-            self.driver.execute_script("window.open('" + url + "', '_self')")
-            self.driver.implicitly_wait(2)
-            imagesXpath = self.driver.find_elements_by_xpath("//*[@class='FFVAD']")
-            for x in imagesXpath:
-                img = x.get_attribute("srcset")
-                # in @srcset there's about 3-4 resolution images url seperated by ,
-                img = img.split(",")
-                img = img[-1][:-6]
-                print(img)
-                if img not in self.images and img is not None:
-                    # last one being highest res image -4 to escpae resoluton X*X in url
-                    self.images.append(img)
-
-            videosXpath = self.driver.find_elements_by_xpath("//*[@class='tWeCl']")
-            for v in videosXpath:
-                video = v.get_attribute("src")
-                if video is not self.videos and video is not None:
-                    self.videos.append(video)
-
-        print("\nTotal Images found = " + str(len(self.images)))
-        print(self.images)
-        print("\nTotal Videos found = " + str(len(self.videos)))
-        print(self.videos)
-        self.saveImages()
-
-    def saveImages(self):
-        # get the username to save phots name accordingly
-        userName = self.url.split("/")
-        userName = userName[-2]
-
-        # saving into working folder as default
-        if self.savePhotosDir is None:
-            self.savePhotosDir = self.savePhotosDir = self.scriptDir + os.path.sep + 'Instagram'
-
-        if not os.path.exists(self.savePhotosDir):
-            os.makedirs(self.savePhotosDir)
-        logger.info('\nFile saving into : ' + str(self.savePhotosDir))
-
-        imgLen = len(self.images)
-        print("Images found = " + str(imgLen))
-        if self.count > imgLen or imgLen is None:
-            self.count = imgLen
-
-        try:
-            for i in range(self.count):
-                fileName = self.savePhotosDir + os.sep + userName + str(i) + ".jpeg"
-                urllib.urlretrieve(self.images[i], fileName)
-                print("\nSaving image = " + str(fileName))
-
-            if len(self.videos) >= 1:
-                for i in range(len(self.videos)):
-                    fileName = self.savePhotosDir + os.sep + userName + str(i) + ".mp4"
-                    urllib.urlretrieve(self.videos[i], fileName)
-                    print("\nSaving image = " + str(fileName))
-
-        except Exception as e:
-            logger.error(str(e))
-
-        print("Execution completed .....")
-        self.driver.close()
+def get_web_html(url):
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.text
+        else:
+            print('Wrong：', response.status_code)
+    except Exception as e:
+        print(e)
+        return None
 
 
-if __name__ == "__main__":
-    driverPath = r"D:\development_group\Tests\Instagram\chromedriver"
-    savePhotosDir = r"D:\development_group\Tests\Instagram"
-    url = "https://www.instagram.com/swingcity.ba/"
-    count = 25
+# only able to query 12 post of one iteration
+def get_twelve_post(edges):
+    global all_posts
+    global post_cnt
 
-    instagram = Instagram(
-        driverPath=driverPath,
-        savePhotosDir=savePhotosDir,
-        url=url,
-        count=count
-    )
-    instagram.loadDriver()
+    # 12 post of this for loop
+    for edge in edges:
+        shortcode = edge['node']['shortcode']
+        url_shortcode = 'https://www.instagram.com/p/' + shortcode + '/?__a=1'
+        with urllib.request.urlopen(url_shortcode) as temp_u:
+            js_data = json.loads(temp_u.read().decode())
+        photo_in_post_cnt = 0
+        post = []
+        if 'edge_sidecar_to_children' in js_data['graphql']['shortcode_media']:
+            edges_shortcode = js_data['graphql']['shortcode_media']['edge_sidecar_to_children']['edges']
+            # num of pic in single post of this for loop
+            for edge_s in edges_shortcode:
+                if edge_s['node']['is_video'] and edge_s['node'][
+                    'video_url'] != 'https://static.cdninstagram.com/rsrc.php/null.jpg':
+                    display_url = edge_s['node']['video_url']
+                elif edge_s['node']['display_url']:
+                    display_url = edge_s['node']['display_url']
+                post.append(display_url)
+                photo_in_post_cnt = photo_in_post_cnt + 1
+        else:
+            if js_data['graphql']['shortcode_media']['is_video'] and js_data['graphql']['shortcode_media'][
+                'video_url'] != 'https://static.cdninstagram.com/rsrc.php/null.jpg':
+                display_url = js_data['graphql']['shortcode_media']['video_url']
+            elif js_data['graphql']['shortcode_media']['display_url']:
+                display_url = js_data['graphql']['shortcode_media']['display_url']
+            post.append(display_url)
+        all_posts.append(post)
+        post_cnt = post_cnt + 1
+
+
+# download all the images to local
+def save_from_url_to_local(dname):
+    for i in range(0, len(all_posts)):
+        for j in range(0, len(all_posts[i])):
+            if re.search('\.mp4\?', all_posts[i][j]):
+                file_name = dname + str(len(all_posts) - 1 - i) + '_' + str(j) + '.mp4'
+            else:
+                file_name = dname + str(len(all_posts) - 1 - i) + '_' + str(j) + '.png'
+            if os.path.isfile(file_name):
+                print(file_name, " already exist.  No need to download for remaining post.")
+                return False
+            else:
+                # print("saving ",all_posts[i][j]," to ", file_name)
+                # urllib.request.urlretrieve(all_posts[i][j], file_name)
+                try:
+                    urllib.request.urlretrieve(all_posts[i][j], file_name)
+                except urllib.error.HTTPError as err:
+                    if err.code == 410:
+                        print(all_posts[i][j], " is gone. Skip downloading... Error code: ", err.code)
+                    else:
+                        print(all_posts[i][j], " downloading fail... Error code: ", err.code)
+                else:
+                    # download success
+                    print("saving ", all_posts[i][j], " to ", file_name)
+    print("First time to query this account.  Download all finished.")
+    return True
+
+
+# user to download
+user_name = 'username'
+# download path
+dname = 'D:\Projects\Sosyal\Instagram\Downloader\\' + user_name + '\\'
+# total query post = 12*(max_post_iter+1)
+max_post_iter = 1000
+
+if not os.path.exists(dname):
+    os.makedirs(dname)
+else:
+    print(dname, " already exist")
+
+url = 'https://www.instagram.com/' + user_name
+headers = {
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36',
+}
+html = get_web_html(url)
+user_id = re.findall('profilePage_([0-9]+)', html, re.S)[0]
+doc = pyquery.PyQuery(html)
+items = doc('script[type="text/javascript"]').items()
+
+print("user_id:", user_id)
+print("url:", url)
+
+# query latest 12 post
+for item in items:
+    if item.text().strip().startswith('window._sharedData'):
+        js_data = json.loads(item.text()[21:-1], encoding='utf-8')
+        edges = js_data['entry_data']['ProfilePage'][0]['graphql']['user']['edge_owner_to_timeline_media']['edges']
+        cursor = \
+        js_data['entry_data']['ProfilePage'][0]['graphql']['user']['edge_owner_to_timeline_media']['page_info'][
+            'end_cursor']
+        flag = js_data['entry_data']['ProfilePage'][0]['graphql']['user']['edge_owner_to_timeline_media']['page_info'][
+            'has_next_page']
+        get_twelve_post(edges)
+
+# query remaining posts other than latest 12  #total query post = 12*(max_post_iter+1)
+for index in range(0, max_post_iter):
+    if (flag):
+        url_next = 'https://instagram.com/graphql/query/?query_id=17888483320059182&id=' + user_id + '&first=12&after=' + cursor
+        print('next url:', url_next)
+        with urllib.request.urlopen(url_next) as temp_u:
+            js_data = json.loads(temp_u.read().decode())
+        edges = js_data['data']['user']['edge_owner_to_timeline_media']['edges']
+        cursor = js_data['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor']
+        flag = js_data['data']['user']['edge_owner_to_timeline_media']['page_info']['has_next_page']
+        get_twelve_post(edges)
+    else:
+        break
+
+save_from_url_to_local(dname)
